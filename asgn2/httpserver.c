@@ -11,26 +11,24 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <errno.h>
+#include <stdbool.h>
+#include <ctype.h>
+
 #define OPTIONS              "t:l:"
+#define VERSION              "HTTP/1.1"
 #define BUF_SIZE             4096
+#define VALUE_SIZE           2048
 #define DEFAULT_THREAD_COUNT 4
 
 static FILE *logfile;
 #define LOG(...) fprintf(logfile, __VA_ARGS__);
 
-#include <errno.h>
-#include <stdbool.h>
-#include <ctype.h>
-
-//#define BUF_SIZE   4096
-#define VALUE_SIZE 2048
-#define VERSION    "HTTP/1.1"
-
 typedef enum key {
     GET,
     PUT,
     APPEND,
-    REQUEST_ID, //id
+    REQUEST_ID,
     HOST,
     USER_AGENT,
     ACCEPT,
@@ -60,16 +58,10 @@ typedef struct Request {
     char path[100]; // URI
     char version[100]; // Version
 
-    char hostvalue[100];
-
     unsigned long int cnt_len; // Content-Length
-    int req_id; //id
-
-    bool has_mtd;
-    bool has_len;
+    int req_id; //Request-Id
 
     char msg_bdy[VALUE_SIZE]; // Message-Body
-
     int read_len;
 
 } Request;
@@ -88,15 +80,11 @@ const char *Phrase(int code) {
     return NULL;
 }
 
-//
-// TODO: remove '/'
-//
 int check_format(Request *req) {
     // Check for version
     if (strncmp(req->version, VERSION, 8) != 0) {
         return 0;
     }
-
     // Check for valid path format
     if (strncmp(req->path, "//", 1) != 0) {
         return 0;
@@ -116,13 +104,12 @@ int check_format(Request *req) {
     return 1;
 }
 
-//
-// TODO: send response for APPEND, PUT
-//
 void send_response(Request *req, int status) {
-    char response[VALUE_SIZE];
+    //fprintf(logfile, "%s,/%s,%d,%d\n", string[req->method], req->path, status, req->req_id);
+    LOG("%s,/%s,%d,%d\n", string[req->method], req->path, status, req->req_id);
+    fflush(logfile);
 
-    printf("req is is %d\n", req->req_id);
+    char response[VALUE_SIZE];
     if (req->method == GET && status == 200) { // Content-Length: length of content from file
         sprintf(response, "HTTP/1.1 %d %s\r\nContent-Length: %d\r\n\r\n", status, Phrase(status),
             req->read_len);
@@ -140,13 +127,8 @@ void send_response(Request *req, int status) {
     return;
 }
 
-// TODO: PUT and APPEND must include a message-body
-//       and a Content-Length header
-// TODO: GET must not include a message-body
-
 void process_get(Request *req) {
     int fd = 0, sz = 0, total_read = 0;
-    //printf("process get, path is %s\n", req->path);
     if ((fd = open(req->path, O_RDONLY, 0)) < 0) {
         if (errno == 2) {
             send_response(req, 404);
@@ -155,24 +137,23 @@ void process_get(Request *req) {
         }
         return;
     }
-    //send_response(req, 200);
-    //char chr[200];
+
     int buf_sz = 300;
     char *chr = (char *) malloc(buf_sz * sizeof(char));
     while ((sz = read(fd, chr + total_read, 200)) > 0) {
         total_read += sz;
-        //write(req->socket, chr, sz);
         if (total_read + 200 > buf_sz) {
             buf_sz += 200;
         }
         chr = (char *) realloc(chr, buf_sz * sizeof(char));
     }
+
     req->read_len = total_read;
     send_response(req, 200);
-    write(req->socket, chr, total_read);
 
-    free(chr);
+    write(req->socket, chr, total_read);
     close(fd);
+    free(chr);
 }
 
 // PUT Method:
@@ -198,7 +179,6 @@ void process_put_append(Request *req) {
     else
         status = 201; // create code CREATED
 
-    //printf("file name is %s\n", req->path);
     if (req->method == PUT) {
         fd = open(req->path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
         if (fd < 0) {
@@ -212,129 +192,87 @@ void process_put_append(Request *req) {
         if (fd < 0) {
             if (errno == 2) { // Not Found
                 send_response(req, 404);
-            } else { // Forbidden
-                send_response(req, 403);
             }
+            /*else { // Forbidden
+                send_response(req, 403);
+            }*/
             return;
         }
     }
 
     write(fd, req->msg_bdy, req->cnt_len);
-    //send_response(req, status);
-    //printf("\nmessage-body is %s length is %lu cnt_len is %lu\n", req->msg_bdy,
-    //strlen(req->msg_bdy), req->cnt_len);
-    /*
-    if (strlen(req->msg_bdy) != req->cnt_len) {
-        send_response(req, 400);
-    }
-    */
+    close(fd);
+
     if (req->cnt_len > strlen(req->msg_bdy)) {
-        //printf("should read more\n");
-        //char reread[BUF_SIZE];
-        //int bytes;
-        //read(req->socket, reread, BUF_SIZE);
         return;
     }
     send_response(req, status);
+    /*
     if (req->cnt_len < strlen(req->msg_bdy)) {
+    	//printf("send bad response\n");
         send_response(req, 400);
-    }
-    close(fd);
+    }*/
 }
 
-//
-// TODO: Why store for HOST header
-// TODO: check for all valid keys
-//
 int parse_line(char *line, Request *req) {
-    //printf("connfd is %d\n", req->socket);
     int key_type = -1;
-    bool isKey = true;
-    char value[5][VALUE_SIZE];
+    int count = 0;
+    char value[10][VALUE_SIZE];
 
     // Extract method and key
     char *tok = NULL;
     tok = strtok(line, " ");
-    if (isKey) {
-        //printf("find a key %s\n", tok);
-        for (int i = 0; i < TOTAL; i++) {
-            if (strstr(tok, string[i])) {
-                key_type = i;
-                break;
-            }
-        }
-        isKey = false;
-        tok = strtok(NULL, " ");
-    }
-
-    // Extract URI, Version, and value
-    int count = 0;
     while (tok != NULL) {
         //printf("\neach value is %s\n", tok);
-        strncpy(value[count], tok, VALUE_SIZE);
-        count++;
+        if (count == 0) {
+            for (int i = 0; i < TOTAL; i++) {
+                if (strstr(tok, string[i])) {
+                    key_type = i;
+                    break;
+                }
+            }
+        } else {
+            strncpy(value[count - 1], tok, VALUE_SIZE);
+        }
+        count += 1;
         tok = strtok(NULL, " ");
     }
 
     // Unexpected line
-    if (key_type == -1) {
+    /*if (key_type == -1) {
         //fprintf(stderr, "Unknown params, ignoring line\n");
         errx(EXIT_FAILURE, "Unknown params, ignoring line\n");
         return -1;
-    }
+    }*/
 
     switch (key_type) {
     case GET: {
-        if (req->has_mtd) {
-            return -1;
-        }
         req->method = GET;
-        req->has_mtd = true;
         strcpy(req->path, value[0]);
         strcpy(req->version, value[1]);
-        //printf("\nmethod is PUT path is %s version is %s\n", value[0], value[1]);
-
         break;
     }
 
     case PUT: {
-        if (req->has_mtd) {
-            return -1;
-        }
         req->method = PUT;
-        req->has_mtd = true;
         strcpy(req->path, value[0]);
         strcpy(req->version, value[1]);
-        //printf("\nmethod is PUT path is %s version is %s\n", value[0], value[1]);
-
         break;
     }
 
     case APPEND: {
-        if (req->has_mtd) {
-            return -1;
-        }
         req->method = APPEND;
-        req->has_mtd = true;
         strcpy(req->path, value[0]);
         strcpy(req->version, value[1]);
         break;
     }
 
-    //id
     case REQUEST_ID: {
         req->req_id = atoi(value[0]);
         break;
     }
-    
+
     case HOST: {
-        if (count > 2) {
-            return -1;
-        }
-        // host value from hostname
-        tok = strtok(value[0], ":");
-        tok = strtok(NULL, " ");
-        strcpy(req->hostvalue, tok);
         break;
     }
 
@@ -346,11 +284,9 @@ int parse_line(char *line, Request *req) {
         break;
     }
 
-    // Assume length is a valid number generated by client curl
     case CONTENT_LENGTH: {
         unsigned long int length = atoi(value[0]);
         req->cnt_len = length;
-        req->has_len = true;
         break;
     }
 
@@ -372,11 +308,7 @@ int parse_line(char *line, Request *req) {
     return 1;
 }
 
-// basically done
 int extract_line(char *buffer, Request *req) {
-
-    //printf("\n%s\n", buffer);
-
     const char *delim = "\r\n\r\n";
     char *msg;
     msg = strstr(buffer, delim);
@@ -387,17 +319,14 @@ int extract_line(char *buffer, Request *req) {
         msg[2] = '\0';
         msg[3] = '\0';
         strncpy(req->msg_bdy, msg + strlen(delim), VALUE_SIZE);
-    } else {
-        return -1;
     }
-    //printf("original message is %s\n", msg + strlen(delim));
-
-    //printf("message line is-%s-real length is %lu\n", req->msg_bdy, strlen(req->msg_bdy));
-    //printf("connfd is %d\n", req->socket);
+    //printf("message line is-%s-real length is %lu\n",
+    //req->msg_bdy, strlen(req->msg_bdy));
 
     char *line = strtok(buffer, "\r\n");
     while (line != NULL) {
-        buffer += strlen(line) + strlen("\r\n"); // manually set index
+        // manually set index
+        buffer += strlen(line) + strlen("\r\n");
         if (parse_line(line, req) < 0) {
             return -1;
         }
@@ -407,21 +336,14 @@ int extract_line(char *buffer, Request *req) {
     return 1;
 }
 
-//
-// TODO: process three operations
-//
 void process_request(int connfd, char *buffer) {
-    //Request req = { 0 };
-    Request req;
-    //memset(&req, 0, sizeof(req));
-    req.has_len = false;
-    req.has_mtd = false;
+    Request req = { 0 };
     req.req_id = 0;
-
     req.socket = connfd;
-    int status = extract_line(buffer, &req);
 
+    int status = extract_line(buffer, &req);
     if (status < 0) {
+        printf("send bad response\n");
         send_response(&req, 400);
         return;
     }
@@ -434,19 +356,11 @@ void process_request(int connfd, char *buffer) {
 
     // Check commands
     if (req.method == PUT || req.method == APPEND) {
-        if (req.has_len == false) {
-            send_response(&req, 400);
-            return;
-        }
         process_put_append(&req);
         return;
     }
 
     else if (req.method == GET) {
-        if (req.has_len == true) {
-            send_response(&req, 400);
-            return;
-        }
         process_get(&req);
         return;
     }
@@ -455,10 +369,9 @@ void process_request(int connfd, char *buffer) {
         send_response(&req, 501);
         return;
     }
+
     return;
 }
-
-
 
 // Converts a string to an 16 bits unsigned integer.
 // Returns 0 if the string is malformed or out of the range.
@@ -494,14 +407,12 @@ static int create_listen_socket(uint16_t port) {
 
 static void handle_connection(int connfd) {
     char buf[BUF_SIZE];
-    ssize_t bytes_read, bytes_written, bytes;
-    do {
-        // Read from connfd until EOF or error.
-        bytes_read = read(connfd, buf, sizeof(buf));
-        if (bytes_read < 0) {
-            return;
-        }
+    memset(buf, 0, sizeof(buf));
+    ssize_t bytes_read;
 
+    // Read from connfd until EOF or error.
+    while ((bytes_read = read(connfd, buf, BUF_SIZE)) > 0) {
+        /*ssize_t bytes_written, bytes;
         // Write to stdout.
         bytes = 0;
         do {
@@ -511,7 +422,7 @@ static void handle_connection(int connfd) {
             }
             bytes += bytes_written;
         } while (bytes_written > 0 && bytes < bytes_read);
-
+		
         // Write to connfd.
         bytes = 0;
         do {
@@ -520,14 +431,11 @@ static void handle_connection(int connfd) {
                 return;
             }
             bytes += bytes_written;
-        } while (bytes_written > 0 && bytes < bytes_read);
-    
-        
+        } while (bytes_written > 0 && bytes < bytes_read);*/
+
         // process request
         process_request(connfd, buf);
-    
-    
-    } while (bytes_read > 0);
+    }
 }
 
 static void sigterm_handler(int sig) {
@@ -580,7 +488,7 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, sigterm_handler);
 
     int listenfd = create_listen_socket(port);
-    LOG("port=%" PRIu16 ", threads=%d\n", port, threads);
+    //LOG("port=%" PRIu16 ", threads=%d\n", port, threads);
 
     for (;;) {
         int connfd = accept(listenfd, NULL, NULL);
