@@ -1,33 +1,24 @@
-Mona Zhao	
+# Assignment 0: A Refresher for Programming in C 
+## Keywords:
+- System calls
+- Library functions
+
+Files
+- 
+#### split.c
+Take a delimiter character and a list of files as input. “Split” each file into a set of lines by replacing each instance of a delimiter character into a new line character and prints the lines to stdout.
+#### Makefile
+- type "make", "make all", or "make httpserver"  to build httpserver
+- type "make clean" to remove all files that are complier generated
+
+Design
 -
-yzhao172
--
-CSE130 Spring 2021
--
-Programming Assignment 5: Graph ADT and Stable Matching 
+#### Usage
+To split a file foo into lines at each instance of the character, a, you would specify:
+```c
+./split a foo
+```
+#### Data Structure
 
-----------
-DESCRIPTION
-
-This assignment implements Graph ADT using matrix representation to support implementation of the
-Gale-Shapley algorithm and finding the M-Optimal set of stable matchings.
-
-----------
-FILES
-
--
-split.c
-
--
-Makefile
-
-This allows the user to type 'make' to compile the program;
-type 'make clean' to remove all files that are compiler generated;
-type 'make check' to check for memory errors.
-
--
-README.md
-
-This file gives the basic information of this assignment.
-
+#### Functions
 
