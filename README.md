@@ -1,3 +1,3 @@
-# CSE130 Repo
+# Principles of Computer System Design
 
-Repo to hold CSE130 work.
+
